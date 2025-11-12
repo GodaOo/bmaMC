@@ -4,25 +4,19 @@
 
 Convert **Blockbench Bedrock entity animations** into **Minecraft Java Edition resource-pack models** with **multi-axis rotation** (25w46a+).
 
----
-
 ## UI
 
 <img height="300" alt="image" src="https://github.com/user-attachments/assets/c06bf067-8480-48f6-8558-84fa85ff7dd7" />
-
----
 
 ## Notes
 
 - **Minecraft 25w46a+ only** (uses per-element XYZ rotation).
 - Animation import supports **translation** and **rotation**; **scale is read but ignored** to avoid distortion.
 
----
-
 ## Usage
 
-1. Create your **Bedrock Entity** model and animations in **Blockbench**.
-2. Open the GUI:
+1. Create your **Bedrock Entity** model and animations in **Blockbench**. Save project as `.bbmodel` file.
+2. Open the bmaMC GUI:
    - Run from terminal: `python gui.py`
 3. Import one or more `.bbmodel` files into **bmaMC** (multi-file import supported).
 4. On the right panel, set:
@@ -34,7 +28,6 @@ Convert **Blockbench Bedrock entity animations** into **Minecraft Java Edition r
    - *Generate*: builds into the selected output folder  
    - *Clear Folder and Generate*: empties that folder first, then builds
 6. Load the output as a **resource pack** in Minecraft.
-
 
 **Example (give item using a dynamic model):**  
 If the model name is `model` and the animation name is `walk`, you can get an apple using the animated model with:
