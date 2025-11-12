@@ -262,7 +262,7 @@ class App(tk.Tk):
         settings.columnconfigure(1, weight=1)
 
         # Welcome messages on first launch
-        log_write(self.log, "Welcome to bmaMC, made by Goda_Oo", "HEADER")
+        log_write(self.log, "Welcome to bmaMC, made by GodaOo", "HEADER")
         log_write(self.log, "Please use Blockbench to create Bedrock Entity models and animations. \nOnly translation and rotation are supported for now; scale is ignored.", "WARN")
         log_write(self.log, "-"*80, "INFO")
 
