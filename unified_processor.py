@@ -144,34 +144,76 @@ def build_indices(bb: dict):
     elements = bb.get("elements", []) or []
     outliner = bb.get("outliner", []) or []
 
-    elements_by_uuid = {e.get("uuid"): e for e in elements if isinstance(e, dict) and e.get("uuid")}
+    elements_by_uuid = {
+        e.get("uuid"): e
+        for e in elements
+        if isinstance(e, dict) and e.get("uuid")
+    }
+
+    # Pre-index all groups (Blockbench 5.x keeps the full definition here).
+    raw_groups: Dict[str, dict] = {}
+    for g in bb.get("groups", []) or []:
+        if isinstance(g, dict) and g.get("uuid"):
+            raw_groups[g["uuid"]] = g
+
     groups_by_uuid: Dict[str, dict] = {}
 
-    def dfs(node):
-        if isinstance(node, dict) and node.get("uuid"):
-            groups_by_uuid[node["uuid"]] = node
-            for ch in node.get("children", []):
-                if isinstance(ch, dict): dfs(ch)
-    for item in outliner or []:
-        dfs(item)
-
-    parent_of: Dict[str, str] = {}
-    def dfs_chain(node, parent_uuid=None):
+    def dfs_outliner(node):
+        # Walk the outliner tree and merge nodes with their raw_group definitions when possible.
         if isinstance(node, dict) and node.get("uuid"):
             uid = node["uuid"]
-            if parent_uuid: parent_of[uid] = parent_uuid
+            base = raw_groups.get(uid, {})
+            merged = dict(base)
+            merged.update(node)
+            groups_by_uuid[uid] = merged
+
+            for ch in node.get("children", []):
+                if isinstance(ch, dict):
+                    dfs_outliner(ch)
+
+    # First preference: use outliner as the authoritative hierarchy description.
+    for item in outliner or []:
+        dfs_outliner(item)
+
+    # Fallback: if some groups never appeared in outliner (or outliner is empty),
+    # make sure they are still present in groups_by_uuid so they can participate in transforms.
+    for uid, g in raw_groups.items():
+        if uid not in groups_by_uuid:
+            groups_by_uuid[uid] = g
+
+    parent_of: Dict[str, str] = {}
+
+    def dfs_chain_outliner(node, parent_uuid=None):
+        # Build parent relationships from outliner, if present.
+        if isinstance(node, dict) and node.get("uuid"):
+            uid = node["uuid"]
+            if parent_uuid:
+                parent_of[uid] = parent_uuid
             for ch in node.get("children", []):
                 if isinstance(ch, str):
+                    # Child may be either an element UUID or a group UUID; record parent if known.
                     if ch in elements_by_uuid or ch in groups_by_uuid:
                         parent_of[ch] = uid
                 elif isinstance(ch, dict):
-                    dfs_chain(ch, uid)
+                    dfs_chain_outliner(ch, uid)
+
     for item in outliner or []:
-        dfs_chain(item, None)
+        dfs_chain_outliner(item, None)
+
+    # If outliner is empty or incomplete, fall back to parent links derived from the groups array itself.
+    if not outliner:
+        for uid, g in groups_by_uuid.items():
+            for ch in g.get("children", []):
+                if isinstance(ch, str) and (ch in elements_by_uuid or ch in groups_by_uuid):
+                    parent_of[ch] = uid
+                elif isinstance(ch, dict) and ch.get("uuid"):
+                    cid = ch["uuid"]
+                    parent_of[cid] = uid
 
     elem_to_group_chain: Dict[str, List[str]] = {}
     for e_uuid in elements_by_uuid.keys():
-        chain=[]
+        # Follow parents up the tree to get the ordered list of groups influencing this element.
+        chain: List[str] = []
         cur = parent_of.get(e_uuid)
         while cur:
             chain.append(cur)
