@@ -36,6 +36,33 @@ If the model name is `model` and the animation name is `walk`, you can get an ap
 ```
 ![example](https://github.com/user-attachments/assets/346b3cc2-6193-4781-ab94-fc917fd062b6)
 
+## Known Issues
+
+1. **Model size limits**
+
+   Minecraft requires each cube’s `from` / `to` coordinates to stay within the range **-16 to 32** on every axis — this includes all positions reached during animation.  
+   If any element goes outside this range at any frame, the model will not render.
+
+   **Workaround: scale down in Blockbench, then scale back up in bmaMC**
+
+   1. In Blockbench, open **File → Project…** and set **Default UV mode** to **Per-Face UV**.  
+   2. Use **Transform → Scale…**, with the **pivot at (0, 0, 0)**, to scale the whole model down.  
+   3. The recommended minimum scale factor is **0.25**. Going smaller than 0.25 cannot be fully restored later, because Minecraft only supports up to **4×** scale back up.  
+   4. Ideally, adjust the model size **before** creating animations.  
+      - If you already have animations, you must manually scale all animated **Position** values:  
+        each keyframe position should be multiplied by the same scale factor you used on the model (for example, original position `10` with scale `0.25` becomes `2.5`).
+   5. In **bmaMC**, set the **Scale** field to the **inverse** of the Blockbench scale you used.  
+      - Example: if you scaled the model to **0.5** in Blockbench, then set **Scale = 2** in bmaMC (`1 / 0.5 = 2`) to restore its in-game size.
+
+2. **Single-sided geometry**
+
+   Some models (for example, `evoker_fangs`) appear to show “inside” faces in Blockbench.  
+   However, due to Minecraft’s rendering rules, faces are only rendered on the **outer side**; the back side (inside) is not drawn.  
+
+   This means **single-sided** or thin, hollow models that rely on visible interior faces will not display correctly in-game.  
+   When designing models for use with bmaMC, avoid relying on geometry where you need to see the inside of a single face or thin shell.
+   ![face_issue](https://github.com/user-attachments/assets/d035965d-bbac-43ea-8a1a-ef5eef150346)
+
 ## Acknowledgments
 
 Special thanks to **ChatGPT** for development assistance and idea refinement,  
