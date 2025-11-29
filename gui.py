@@ -158,6 +158,8 @@ def run_generation(
                 for anim in animations:
                     anim_label = sanitize_name(anim.get("name") or anim.get("uuid") or "default")
 
+                    bounds_issues: List[Tuple[int, str, List[float], List[float]]] = []
+
                     model_ids = build_models_for_animation(
                         bb=data,
                         model_name=model_name,
@@ -171,43 +173,43 @@ def run_generation(
                         bounds_issues_out=bounds_issues,
                     )
 
-                if bounds_issues:
-                    log_write(
-                        log,
-                        f"  └─ [Warning] Animation '{anim_label}' skipped because some elements are outside [-16, 32].",
-                        "WARN",
-                    )
-                    for fi, ename, fvec, tvec in bounds_issues:
+                    if bounds_issues:
                         log_write(
                             log,
-                            f"       frame {fi+1}: element '{ename}' has from={fvec}, to={tvec}",
+                            f"  └─ [BOUNDS] Animation '{anim_label}' skipped because some elements are outside [-16, 32].",
                             "WARN",
                         )
-                    scale_suggestion = compute_recommended_scale_from_bounds(bounds_issues)
-                    if scale_suggestion is not None:
-                        log_write(
-                            log,
-                            f"       Suggested scale setting in Blockbench (centered at 0,0,0): {scale_suggestion:.3f}",
-                            "HEADER",
-                        )
-                        if scale_suggestion < 0.25:
+                        for fi, ename, fvec, tvec in bounds_issues:
                             log_write(
                                 log,
-                                "       Note: required scale is below 0.250; the model is too large to be fully visible at its original size.",
+                                f"       frame {fi+1}: element '{ename}' has from={fvec}, to={tvec}",
                                 "WARN",
                             )
-                    continue  # do not generate items json for this animation
+                        scale_suggestion = compute_recommended_scale_from_bounds(bounds_issues)
+                        if scale_suggestion is not None:
+                            log_write(
+                                log,
+                                f"       Suggested scale setting in Blockbench (centered at 0,0,0): {scale_suggestion:.3f}",
+                                "HEADER",
+                            )
+                            if scale_suggestion < 0.25:
+                                log_write(
+                                    log,
+                                    "       Note: required scale is below 0.250; the model is too large to be fully visible at its original size.",
+                                    "WARN",
+                                )
+                        continue
 
-                if not model_ids:
-                    log_write(
-                        log,
-                        f"  └─ [WARN] Animation '{anim_label}' produced no models.",
-                        "WARN",
-                    )
-                    continue
+                    if not model_ids:
+                        log_write(
+                            log,
+                            f"  └─ [WARN] Animation '{anim_label}' produced no models.",
+                            "WARN",
+                        )
+                        continue
 
-                items_json_path = write_items_composite(items_base, model_name, anim_label, model_ids)
-                log_write(log, f"  └─ [{anim_label}] models={len(model_ids)} → {items_json_path}", "SUCCESS")
+                    items_json_path = write_items_composite(items_base, model_name, anim_label, model_ids)
+                    log_write(log, f"  └─ [{anim_label}] models={len(model_ids)} → {items_json_path}", "SUCCESS")
 
             except Exception as sub_e:
                 log_write(log, "  └─ ERROR: " + "".join(traceback.format_exception_only(type(sub_e), sub_e)).strip(), "ERROR")
