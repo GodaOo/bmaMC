@@ -61,6 +61,7 @@ If the model name is `model` and the animation name is `walk`, you can get an ap
 
    This means **single-sided** or thin, hollow models that rely on visible interior faces will not display correctly in-game.  
    When designing models for use with bmaMC, avoid relying on geometry where you need to see the inside of a single face or thin shell.
+   
    ![face_issue](https://github.com/user-attachments/assets/d035965d-bbac-43ea-8a1a-ef5eef150346)
 
 ## Acknowledgments
