@@ -12,7 +12,7 @@ from atlas_utils import (
 DISPLAY_SLOTS = [
     "thirdperson_righthand","thirdperson_lefthand",
     "firstperson_righthand","firstperson_lefthand",
-    "gui","head","ground","fixed",
+    "gui","head","ground","fixed","on_shelf",
 ]
 
 def to_float(v, d=0.0):
@@ -96,32 +96,23 @@ def vec_add(a,b): return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]
 def vec_sub(a,b): return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]
 
 def euler_from_matrix_xyz(R3):
-    # Extract x/y/z for R = Ry(y) * Rx(x) * Rz(z); returns degrees.
-    r00, r01, r02 = R3[0]
-    r10, r11, r12 = R3[1]
-    r20, r21, r22 = R3[2]
+    # Extract XYZ-order Euler in degrees; tuned to match vanilla's interpretation.
+    r11, r12, r13 = R3[0][0], R3[0][1], R3[0][2]
+    r21, r22, r23 = R3[1][0], R3[1][1], R3[1][2]
+    r31, r32, r33 = R3[2][0], R3[2][1], R3[2][2]
 
-    # x from r12 = -sin(x)
-    sx = -r12
-    if sx <= -1.0:
-        x = -math.pi / 2.0
-    elif sx >= 1.0:
-        x =  math.pi / 2.0
+    ry = math.asin(max(-1.0, min(1.0, r13)))
+    cy = math.cos(ry)
+
+    if abs(cy) > 1e-6:
+        rx = math.atan2(-r23, r33)
+        rz = math.atan2(-r12, r11)
     else:
-        x = math.asin(sx)
+        rx = math.atan2(r21, r22)
+        rz = 0.0
 
-    cx = math.cos(x)
+    return [rad2deg(rx), rad2deg(ry), rad2deg(rz)]
 
-    if abs(cx) > 1e-6:
-        # Regular case: recover z, y from off-diagonals.
-        z = math.atan2(r10, r11)
-        y = math.atan2(r02, r22)
-    else:
-        # Gimbal lock at x ≈ ±90°; prefer to keep motion on y.
-        z = 0.0
-        y = math.atan2(-r20, r00)
-
-    return [rad2deg(x), rad2deg(y), rad2deg(z)]
 
 def normalize_rot(R3):
     # Remove implicit scale/shear so Euler extraction and pivot solving stay well-conditioned.
