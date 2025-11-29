@@ -64,6 +64,23 @@ If the model name is `model` and the animation name is `walk`, you can get an ap
    
    ![face_issue](https://github.com/user-attachments/assets/d035965d-bbac-43ea-8a1a-ef5eef150346)
 
+## Showcase
+
+To quickly see bmaMC in action, load `bmamc.zip` as a **resource pack** in Minecraft, then run:
+
+```mcfunction
+/summon item_display ~ ~ ~ {item_display:"head",item:{id:"minecraft:apple",count:1,components:{"minecraft:item_model":"polar_bear/attack"}}}
+```
+```mcfunction
+/summon item_display ~ ~ ~ {item_display:"head",item:{id:"minecraft:apple",count:1,components:{"minecraft:item_model":"polar_bear/walk"}}}
+```
+
+https://github.com/user-attachments/assets/1916073d-6549-4331-a988-e11a5bd3bcbc
+
+The original Blockbench model used for this demo is included in the repository:  
+you can find the `polar_bear` model file under `example_model` folder.  
+Remember to scale it up by **4×** when using bmaMC.
+
 ## Acknowledgments
 
 Special thanks to **ChatGPT** for development assistance and idea refinement,  
