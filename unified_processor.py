@@ -395,7 +395,7 @@ def build_models_for_animation(
                           to_float(el_rot[1] if len(el_rot)>1 else 0),
                           to_float(el_rot[2] if len(el_rot)>2 else 0)]
             R_e = normalize_rot(mat3_from4(mat_euler_xyz(el_rot[0], el_rot[1], el_rot[2])))
-            R_total = mat3_mul(R_b, R_e)
+            R_total = mat3_mul(R_e, R_b)
             rot_xyz = euler_from_matrix_xyz(R_total)
 
             # Moving the pivot from element origin to body pivot introduces an offset; compensate by shifting geometry.
