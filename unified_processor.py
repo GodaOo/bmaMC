@@ -1,4 +1,3 @@
-# unified_processor.py
 import json, math
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
@@ -67,7 +66,7 @@ def mat_rz(az):
 
 def mat_euler_xyz(rx,ry,rz):
     # Follows three.js "XYZ" convention so exported models match editor expectations.
-    return mat_mul(mat_mul(mat_rz(rz), mat_ry(ry)), mat_rx(rx))
+    return mat_mul(mat_mul(mat_ry(ry), mat_rx(rx)), mat_rz(rz))
 
 def mat3_from4(m4):
     return [[m4[0][0],m4[0][1],m4[0][2]],
@@ -97,19 +96,32 @@ def vec_add(a,b): return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]
 def vec_sub(a,b): return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]
 
 def euler_from_matrix_xyz(R3):
-    # Extract XYZ-order Euler in degrees; stable enough for vanilla per-element rotation fields.
-    r11,r12,r13 = R3[0][0],R3[0][1],R3[0][2]
-    r21,r22,r23 = R3[1][0],R3[1][1],R3[1][2]
-    r31,r32,r33 = R3[2][0],R3[2][1],R3[2][2]
-    ry = math.asin(max(-1.0, min(1.0, r13)))
-    cy = math.cos(ry)
-    if abs(cy) > 1e-6:
-        rx = math.atan2(-r23, r33)
-        rz = math.atan2(-r12, r11)
+    # Extract x/y/z for R = Ry(y) * Rx(x) * Rz(z); returns degrees.
+    r00, r01, r02 = R3[0]
+    r10, r11, r12 = R3[1]
+    r20, r21, r22 = R3[2]
+
+    # x from r12 = -sin(x)
+    sx = -r12
+    if sx <= -1.0:
+        x = -math.pi / 2.0
+    elif sx >= 1.0:
+        x =  math.pi / 2.0
     else:
-        rx = math.atan2(r21, r22)
-        rz = 0.0
-    return [rad2deg(rx), rad2deg(ry), rad2deg(rz)]
+        x = math.asin(sx)
+
+    cx = math.cos(x)
+
+    if abs(cx) > 1e-6:
+        # Regular case: recover z, y from off-diagonals.
+        z = math.atan2(r10, r11)
+        y = math.atan2(r02, r22)
+    else:
+        # Gimbal lock at x ≈ ±90°; prefer to keep motion on y.
+        z = 0.0
+        y = math.atan2(-r20, r00)
+
+    return [rad2deg(x), rad2deg(y), rad2deg(z)]
 
 def normalize_rot(R3):
     # Remove implicit scale/shear so Euler extraction and pivot solving stay well-conditioned.
@@ -258,17 +270,46 @@ def group_local_matrix_at_time(group: dict, anim: dict, t: float):
     # Build a group local transform around its pivot; stacking groups matches Blockbench's mental model.
     gid = group.get("uuid")
     animator = (anim.get("animators", {}) or {}).get(gid, {})
-    trans, rot, _scl = eval_animator_channels(animator, t)
 
+    # Sample animated channels.
+    trans, rot_anim, _scl = eval_animator_channels(animator, t)
+
+    # Static group rotation from the group definition (rest pose).
+    rot_static = group.get("rotation", [0, 0, 0])
+    if isinstance(rot_static, dict):
+        rot_static = [
+            to_float(rot_static.get("x", 0.0)),
+            to_float(rot_static.get("y", 0.0)),
+            to_float(rot_static.get("z", 0.0)),
+        ]
+    else:
+        rot_static = [
+            to_float(rot_static[0] if len(rot_static) > 0 else 0.0),
+            to_float(rot_static[1] if len(rot_static) > 1 else 0.0),
+            to_float(rot_static[2] if len(rot_static) > 2 else 0.0),
+        ]
+
+    # Animation is authored as an offset from the rest pose.
+    # Instead of simply adding Euler angles, compose the static and animated rotations as matrices:
+    #   R_total = R_anim * R_static
+    # This keeps the rotation behavior well-defined even for large angles.
+    R_static4 = mat_euler_xyz(rot_static[0], rot_static[1], rot_static[2])
+    R_anim4   = mat_euler_xyz(rot_anim[0],  rot_anim[1],  rot_anim[2])
+    R_total4  = mat_mul(R_anim4, R_static4)
+
+    # Group pivot/origin.
     ox, oy, oz = 0.0, 0.0, 0.0
     if isinstance(group.get("origin"), list) and len(group["origin"]) == 3:
         ox, oy, oz = [to_float(v) for v in group["origin"]]
-    ox += 8.0; oz += 8.0  # align to vanilla +8 authoring convention
+
+    # Align to vanilla +8 authoring convention on X/Z.
+    ox += 8.0
+    oz += 8.0
 
     M = mat_identity()
     M = mat_mul(M, mat_translate(trans[0], trans[1], trans[2]))
     M = mat_mul(M, mat_translate(ox, oy, oz))
-    M = mat_mul(M, mat_euler_xyz(rot[0], rot[1], rot[2]))
+    M = mat_mul(M, R_total4)
     M = mat_mul(M, mat_translate(-ox, -oy, -oz))
     return M
 
@@ -290,7 +331,8 @@ def build_models_for_animation(
     json_base: Path,
     display_offset = (0.0, 0.0, 0.0),
     display_scale  = (1.0, 1.0, 1.0),
-    display_rotation = (0.0, 0.0, 0.0),  # NEW
+    display_rotation = (0.0, 0.0, 0.0),
+    bounds_issues_out = None,
 ):
     """
     Exports one vanilla model per sampled frame. Each model uses element-level XYZ rotation and a shared 2-frame texture:
@@ -298,7 +340,7 @@ def build_models_for_animation(
     global index, so texture size stays fixed regardless of animation length.
     """
 
-    # Frame sampling pairs with .mcmeta timing; compositing lets vanilla swap frames without code.
+        # Frame sampling pairs with .mcmeta timing; compositing lets vanilla swap frames without code.
     elements_by_uuid, groups_by_uuid, elem_to_chain = build_indices(bb)
     length = float(anim.get("length", 0) or 0.0)
     step = 1.0 / max(1, fps)
@@ -306,7 +348,8 @@ def build_models_for_animation(
     tcur = 0.0
     while tcur < length - 1e-9:
         times.append(round(tcur, 6)); tcur += step
-    if not times: times = [0.0]
+    if not times:
+        times = [0.0]
     TOTAL_FRAMES = len(times)
     mc_frametime = max(1, int(round(20.0 / max(1, fps))))
 
@@ -338,25 +381,13 @@ def build_models_for_animation(
 
     model_ids: List[str] = []
 
+    # First pass: compute per-frame elements and collect bounds issues.
+    frames_elements: List[List[dict]] = []
+    local_issues: List[Tuple[int, str, List[float], List[float]]] = []
+
     for fi, tval in enumerate(times):
-        # Two-frame image: atlas on frame 0; frame 1 left blank.
-        sheet = Image.new("RGBA", (aw, TWO_FRAME_H), (0, 0, 0, 0))
-        sheet.paste(atlas_img, (0, 0))
-        stem = f"frame_{fi+1:03d}"
-        png_path  = png_dir  / f"{stem}.png"
-        json_path = json_dir / f"{stem}.json"
-        sheet.save(png_path)
+        elements_out: List[dict] = []
 
-        # Frames array gates visibility: only this frame index uses atlas (0), others use transparent (1).
-        frames_seq = [1] * TOTAL_FRAMES
-        frames_seq[fi] = 0
-        (png_dir / f"{stem}.png.mcmeta").write_text(
-            json.dumps({"animation": {"frametime": mc_frametime, "frames": frames_seq}}, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        textures_value = "item/" + png_path.relative_to(png_base).as_posix()[:-4]
-
-        elements_out = []
         for uuid, el in elements_by_uuid.items():
             chain = elem_to_chain.get(uuid, [])
 
@@ -381,10 +412,10 @@ def build_models_for_animation(
                     P_body = [(f0[0]+t0[0])/2.0, (f0[1]+t0[1])/2.0, (f0[2]+t0[2])/2.0]
 
             # Normalize element geometry; if no element origin, use the box center to avoid bias.
-            f = plus8_xz(el.get("from", [8,8,8]))
-            t_ = plus8_xz(el.get("to",   [8,8,8]))
+            base_from = plus8_xz(el.get("from", [8,8,8]))
+            base_to   = plus8_xz(el.get("to",   [8,8,8]))
             O_e = plus8_xz(el["origin"]) if isinstance(el.get("origin"), list) and len(el["origin"])==3 \
-                 else [(f[0]+t_[0])/2.0, (f[1]+t_[1])/2.0, (f[2]+t_[2])/2.0]
+                 else [(base_from[0]+base_to[0])/2.0, (base_from[1]+base_to[1])/2.0, (base_from[2]+base_to[2])/2.0]
 
             # Compose element's static rotation with body rotation so the orientation matches authored intent.
             el_rot = el.get("rotation", [0,0,0])
@@ -395,6 +426,7 @@ def build_models_for_animation(
                           to_float(el_rot[1] if len(el_rot)>1 else 0),
                           to_float(el_rot[2] if len(el_rot)>2 else 0)]
             R_e = normalize_rot(mat3_from4(mat_euler_xyz(el_rot[0], el_rot[1], el_rot[2])))
+            # Element then body, consistent with R = Ry(y)*Rx(x)*Rz(z) convention.
             R_total = mat3_mul(R_e, R_b)
             rot_xyz = euler_from_matrix_xyz(R_total)
 
@@ -407,6 +439,16 @@ def build_models_for_animation(
             term3 = mat3_mul_vec(mat3_mul(R_e_inv, R_b_inv), T_residual)
             D = vec_add(vec_add(term1, term2), term3)
 
+            # Final from/to after animation.
+            new_from = [base_from[0]+D[0], base_from[1]+D[1], base_from[2]+D[2]]
+            new_to   = [base_to[0]+D[0],   base_to[1]+D[1],   base_to[2]+D[2]]
+
+            # Bounds check: all coordinates must be in [-16, 32].
+            coords = new_from + new_to
+            if (min(coords) < -16.0) or (max(coords) > 32.0):
+                ename = el.get("name") or uuid
+                local_issues.append((fi, str(ename), new_from, new_to))
+
             # Faces move with the cube; UVs only need atlas offsets and 16-based conversion.
             faces_new = {}
             (px, py) = placements.get(uuid, (0,0))
@@ -417,15 +459,49 @@ def build_models_for_animation(
             elements_out.append({
                 "uuid": uuid,
                 "name": el.get("name"),
-                "from": [f[0]+D[0], f[1]+D[1], f[2]+D[2]],
-                "to":   [t_[0]+D[0], t_[1]+D[1], t_[2]+D[2]],
+                "from": new_from,
+                "to":   new_to,
                 "rotation": {"x": rot_xyz[0], "y": rot_xyz[1], "z": rot_xyz[2], "origin": P_body},
                 "faces": faces_new
             })
 
+        frames_elements.append(elements_out)
+
+    # If any element in any frame is out-of-bounds, skip this animation entirely.
+    if local_issues:
+        if bounds_issues_out is not None:
+            bounds_issues_out.extend(local_issues)
+        return []
+
+    # Second pass: no issues, actually write images and JSON models.
+    for fi, _tval in enumerate(times):
+        # Two-frame image: atlas on frame 0; frame 1 left blank.
+        sheet = Image.new("RGBA", (aw, TWO_FRAME_H), (0, 0, 0, 0))
+        sheet.paste(atlas_img, (0, 0))
+        stem = f"frame_{fi+1:03d}"
+        png_path  = png_dir  / f"{stem}.png"
+        json_path = json_dir / f"{stem}.json"
+        sheet.save(png_path)
+
+        # Frames array gates visibility: only this frame index uses atlas (0), others use transparent (1).
+        frames_seq = [1] * TOTAL_FRAMES
+        frames_seq[fi] = 0
+        (png_dir / f"{stem}.png.mcmeta").write_text(
+            json.dumps({"animation": {"frametime": mc_frametime, "frames": frames_seq}}, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+        textures_value = "item/" + png_path.relative_to(png_base).as_posix()[:-4]
+
+        elements_out = frames_elements[fi]
+
         # Apply uniform display rotation/offset/scale after baking animation.
         display = build_display(display_offset, display_scale, display_rotation)
-        out_json = {"credit": "Made with Blockbench and converted by bmaMC", "textures": {"0": textures_value}, "display": display, "elements": elements_out}
+        out_json = {
+            "credit": "Made with Blockbench and converted by bmaMC",
+            "textures": {"0": textures_value},
+            "display": display,
+            "elements": elements_out
+        }
         json_path.write_text(json.dumps(out_json, ensure_ascii=False, indent=2), encoding="utf-8")
 
         rel = json_path.relative_to(json_base).as_posix()
