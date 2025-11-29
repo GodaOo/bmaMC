@@ -17,7 +17,11 @@ Convert **Blockbench Bedrock entity animations** into **Minecraft Java Edition r
 
 1. Create your **Bedrock Entity** model and animations in **Blockbench**. Save project as `.bbmodel` file.
 2. Open the bmaMC GUI:
-   - Run from terminal: `python gui.py`
+   - **Option A – run from source**: from terminal, run  
+     `python gui.py`
+   - **Option B – use the Windows executable**: download `bmaMC_v1.0.0.exe` from  
+     https://www.mediafire.com/file/o4232hd60ujv6jq/bmaMC_v1.0.0.exe/file  
+     and run it directly.
 3. Import one or more `.bbmodel` files into **bmaMC** (multi-file import supported).
 4. On the right panel, set:
    - **Output folder**
