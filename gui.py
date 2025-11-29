@@ -9,13 +9,14 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 from typing import List, Tuple
+import math
 
 # generator API
 from unified_processor import build_models_for_animation, sanitize_name
 
 
 APP_TITLE = "bmaMC"
-
+SETTINGS_PATH = Path("setting.txt")
 
 # ----------------------------- Utilities -----------------------------
 
@@ -73,6 +74,38 @@ def log_write(text: ScrolledText, msg: str, level: str = "INFO") -> None:
     text.configure(state="disabled")
     text.update_idletasks()
 
+def compute_recommended_scale_from_bounds(bounds_issues):
+    """
+    Given a list of (frame_index, element_name, from, to), compute a uniform
+    scale factor s (about origin 0,0,0) so that all offending coordinates
+    fall into [-16, 32]. Returns None if no suggestion can be computed.
+    """
+    candidates: List[float] = []
+
+    for _fi, _ename, fvec, tvec in bounds_issues:
+        for c in list(fvec) + list(tvec):
+            if c > 32.0:
+                # After scaling: s * c <= 32  →  s <= 32 / c
+                candidates.append(32.0 / c)
+            elif c < -16.0:
+                # After scaling: s * c >= -16 →  s <= 16 / |c|
+                candidates.append(16.0 / abs(c))
+
+    if not candidates:
+        return None
+
+    s = min(candidates)
+
+    if s <= 0.0:
+        return None
+
+    # Only suggest shrinking; never enlarge beyond 1.0
+    if s > 1.0:
+        s = 1.0
+
+    # Truncate (floor) to 3 decimal places, no rounding
+    s_floor = math.floor(s * 1000.0) / 1000.0
+    return s_floor
 
 # ----------------------------- Generation -----------------------------
 
@@ -120,6 +153,8 @@ def run_generation(
                 animations = data.get("animations", []) or [{"name": "default", "uuid": "default", "length": 0, "animators": {}}]
                 log_write(log, f"  └─ animations: {len(animations)}", "DIM")
 
+                bounds_issues: List[Tuple[int, str, List[float], List[float]]] = []
+
                 for anim in animations:
                     anim_label = sanitize_name(anim.get("name") or anim.get("uuid") or "default")
 
@@ -133,10 +168,46 @@ def run_generation(
                         display_offset=list(display_offset),
                         display_scale=list(display_scale),
                         display_rotation=list(display_rotation),
+                        bounds_issues_out=bounds_issues,
                     )
 
-                    items_json_path = write_items_composite(items_base, model_name, anim_label, model_ids)
-                    log_write(log, f"  └─ [{anim_label}] models={len(model_ids)} → {items_json_path}", "SUCCESS")
+                if bounds_issues:
+                    log_write(
+                        log,
+                        f"  └─ [Warning] Animation '{anim_label}' skipped because some elements are outside [-16, 32].",
+                        "WARN",
+                    )
+                    for fi, ename, fvec, tvec in bounds_issues:
+                        log_write(
+                            log,
+                            f"       frame {fi+1}: element '{ename}' has from={fvec}, to={tvec}",
+                            "WARN",
+                        )
+                    scale_suggestion = compute_recommended_scale_from_bounds(bounds_issues)
+                    if scale_suggestion is not None:
+                        log_write(
+                            log,
+                            f"       Suggested scale setting in Blockbench (centered at 0,0,0): {scale_suggestion:.3f}",
+                            "HEADER",
+                        )
+                        if scale_suggestion < 0.25:
+                            log_write(
+                                log,
+                                "       Note: required scale is below 0.250; the model is too large to be fully visible at its original size.",
+                                "WARN",
+                            )
+                    continue  # do not generate items json for this animation
+
+                if not model_ids:
+                    log_write(
+                        log,
+                        f"  └─ [WARN] Animation '{anim_label}' produced no models.",
+                        "WARN",
+                    )
+                    continue
+
+                items_json_path = write_items_composite(items_base, model_name, anim_label, model_ids)
+                log_write(log, f"  └─ [{anim_label}] models={len(model_ids)} → {items_json_path}", "SUCCESS")
 
             except Exception as sub_e:
                 log_write(log, "  └─ ERROR: " + "".join(traceback.format_exception_only(type(sub_e), sub_e)).strip(), "ERROR")
@@ -162,6 +233,9 @@ class App(tk.Tk):
             self.iconbitmap("icon.ico")
         except Exception:
             pass
+
+        # Save settings on close.
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # State
         self.files: List[Path] = []
@@ -262,9 +336,109 @@ class App(tk.Tk):
         settings.columnconfigure(1, weight=1)
 
         # Welcome messages on first launch
-        log_write(self.log, "Welcome to bmaMC, made by GodaOo", "HEADER")
+        log_write(self.log, "Welcome to bmaMC, made by Goda_Oo", "HEADER")
         log_write(self.log, "Please use Blockbench to create Bedrock Entity models and animations. \nOnly translation and rotation are supported for now; scale is ignored.", "WARN")
         log_write(self.log, "-"*80, "INFO")
+
+        self.load_settings()
+
+    # ----------------- Settings -----------------
+
+    def load_settings(self):
+        if not SETTINGS_PATH.exists():
+            return
+        try:
+            data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            log_write(self.log, f"[SETTINGS] Failed to load {SETTINGS_PATH}", "WARN")
+            return
+
+        # Output path / basic options
+        out_path = data.get("out_path", "")
+        if isinstance(out_path, str):
+            self.out_var.set(out_path)
+
+        self.desc_var.set(data.get("description", ""))
+
+        pf = data.get("pack_format")
+        if isinstance(pf, int):
+            self.pack_var.set(pf)
+
+        fps = data.get("fps")
+        if isinstance(fps, int):
+            self.fps_var.set(fps)
+
+        # Display vectors
+        def apply_vec(vars3, key):
+            vec = data.get(key)
+            if isinstance(vec, (list, tuple)) and len(vec) == 3:
+                for i in range(3):
+                    try:
+                        vars3[i].set(float(vec[i]))
+                    except Exception:
+                        pass
+
+        apply_vec(self.offset_vars, "display_offset")
+        apply_vec(self.scale_vars,  "display_scale")
+        apply_vec(self.rot_vars,    "display_rotation")
+
+        # Files list
+        files = data.get("files", [])
+        if isinstance(files, list):
+            for s in files:
+                try:
+                    p = Path(str(s))
+                except Exception:
+                    continue
+                if p.exists() and p.suffix.lower() == ".bbmodel":
+                    if p not in self.files:
+                        self.files.append(p)
+                        self.listbox.insert("end", str(p))
+
+        log_write(self.log, f"[SETTINGS] Loaded from {SETTINGS_PATH}", "SUCCESS")
+
+    def save_settings(self):
+        # Read current vectors safely
+        offset = self._read_vec(self.offset_vars)
+        scale  = self._read_vec(self.scale_vars)
+        rot    = self._read_vec(self.rot_vars)
+
+        try:
+            pack_format = int(self.pack_var.get())
+        except Exception:
+            pack_format = 0
+
+        try:
+            fps = int(self.fps_var.get())
+        except Exception:
+            fps = 0
+
+        data = {
+            "out_path": self.out_var.get().strip(),
+            "description": self.desc_var.get(),
+            "pack_format": pack_format,
+            "fps": fps,
+            "display_offset": list(offset),
+            "display_scale": list(scale),
+            "display_rotation": list(rot),
+            "files": [str(p) for p in self.files],
+        }
+
+        try:
+            SETTINGS_PATH.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            log_write(self.log, f"[SETTINGS] Saved to {SETTINGS_PATH}", "DIM")
+        except Exception:
+            log_write(self.log, f"[SETTINGS] Failed to save to {SETTINGS_PATH}", "ERROR")
+
+    def on_close(self):
+        try:
+            self.save_settings()
+        except Exception:
+            pass
+        self.destroy()
 
     # ----------------- Callbacks -----------------
 
@@ -346,6 +520,11 @@ class App(tk.Tk):
             )
         except Exception as e:
             messagebox.showerror("Error", f"{e}")
+        finally:
+            try:
+                self.save_settings()
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     import sys
